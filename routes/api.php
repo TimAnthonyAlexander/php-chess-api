@@ -10,3 +10,4 @@ use App\Http\Controllers\FormController;
 
 Route::post('/form-endpoint', [FormController::class, 'handle']);
 Route::post('/register', [AuthController::class, 'register']);
+Route::post('/login', [AuthController::class, 'login']);
