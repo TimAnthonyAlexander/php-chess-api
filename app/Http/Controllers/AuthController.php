@@ -43,9 +43,11 @@ class AuthController extends Controller
             ], 401);
         }
 
-        // For demonstration, return user info. In production, return a token.
+        $token = $user->createToken('api')->plainTextToken;
+        
         return response()->json([
             'message' => 'Login successful',
+            'token' => $token,
             'user' => $user,
         ]);
     }
