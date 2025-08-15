@@ -18,7 +18,7 @@ final class GameController extends Controller
 {
     public function show(int $id)
     {
-        $g = Game::findOrFail($id);
+        $g = Game::with(['white', 'black', 'timeControl'])->findOrFail($id);
         $moves = GameMove::where('game_id', $id)->orderBy('ply')->get();
         return response()->json(['game' => $g, 'moves' => $moves]);
     }
@@ -26,7 +26,7 @@ final class GameController extends Controller
     public function sync(int $id, Request $r)
     {
         $since = (int) $r->query('since', 0); // last known ply
-        $g = Game::findOrFail($id);
+        $g = Game::with(['white', 'black', 'timeControl'])->findOrFail($id);
         $new = GameMove::where('game_id', $id)->where('ply', '>', $since)->orderBy('ply')->get();
         return response()->json([
             'status' => $g->status,
@@ -36,6 +36,9 @@ final class GameController extends Controller
             'white_time_ms' => $g->white_time_ms,
             'black_time_ms' => $g->black_time_ms,
             'last_move_at' => $g->last_move_at?->toISOString(),
+            'white' => $g->white,
+            'black' => $g->black,
+            'timeControl' => $g->timeControl,
             'moves' => $new
         ]);
     }
