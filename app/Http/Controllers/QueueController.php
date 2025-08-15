@@ -15,10 +15,13 @@ final class QueueController extends Controller
     {
         $user = $r->user();
         $tc = TimeControl::where('slug', $r->validate(['tc' => 'required|string'])['tc'])->firstOrFail();
-        $rating = PlayerRating::firstOrCreate(['user_id' => $user->id, 'time_class' => $tc->time_class])->rating;
+        $playerRating = PlayerRating::firstOrCreate(
+            ['user_id' => $user->id, 'time_class' => $tc->time_class],
+            ['rating' => 1500] // Default rating for new players
+        );
         QueueEntry::updateOrCreate(
             ['user_id' => $user->id, 'time_control_id' => $tc->id],
-            ['snapshot_rating' => $rating, 'joined_at' => now()]
+            ['snapshot_rating' => $playerRating->rating, 'joined_at' => now()]
         );
         return $this->attemptMatch($tc, $user->id);
     }
