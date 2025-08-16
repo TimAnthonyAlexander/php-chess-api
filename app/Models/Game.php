@@ -28,6 +28,13 @@ class Game extends Model
         'white_time_ms' => 'integer',
         'black_time_ms' => 'integer',
     ];
+    
+    protected $appends = ['timeControl'];
+    
+    public function getTimeControlAttribute()
+    {
+        return $this->timeControl()->first();
+    }
 
     public function timeControl()
     {
