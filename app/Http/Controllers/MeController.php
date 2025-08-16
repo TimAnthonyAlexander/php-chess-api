@@ -8,6 +8,11 @@ use Illuminate\Http\Request;
 
 class MeController extends Controller
 {
+    public function currentUser(Request $request)
+    {
+        $user = $request->user();
+        return response()->json(['user' => $user]);
+    }
     public function activeGame(Request $request)
     {
         $user = $request->user();

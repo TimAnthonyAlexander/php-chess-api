@@ -22,6 +22,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/queue/leave', [QueueController::class, 'leave']);
     
     // User specific
+    Route::get('/me', [MeController::class, 'currentUser']);
     Route::get('/me/active-game', [MeController::class, 'activeGame']);
     Route::get('/me/recent-games', [MeController::class, 'recentGames']);
     Route::get('/me/ratings', [MeController::class, 'ratings']);
