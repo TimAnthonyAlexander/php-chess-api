@@ -1,13 +1,26 @@
 # Chess Multiplayer Backend (Laravel)
 
-This is a PHP Laravel backend for a Chess multiplayer website. It provides user authentication, form handling, and a foundation for building real-time multiplayer chess games.
+This project is a PHP Laravel backend for a modern chess multiplayer website. It provides a robust API for user authentication, matchmaking, game management, leaderboards, and more. The backend is designed for extensibility, security, and real-time play.
 
 ## Features
 
 - **User Registration & Login**: Secure endpoints for user sign-up and authentication.
-- **API-First**: All endpoints are exposed via RESTful APIs (see `routes/api.php`).
-- **Extensible Controllers**: Easily add new endpoints for chess games, moves, matchmaking, and more.
+- **Game Management**: Create, sync, move, resign, offer/accept draws, and handle time controls for chess games.
+- **Matchmaking Queue**: Join and leave matchmaking queues for different time controls.
+- **Player Ratings & Leaderboards**: Track player ratings by time class and display leaderboards.
+- **User Profile & Activity**: Fetch current user info, active games, and recent games.
+- **API-First**: All endpoints are exposed via RESTful APIs.
 - **Laravel Foundation**: Built on Laravel 12.x for reliability, security, and scalability.
+
+## Main Controllers
+
+- `AuthController`: Handles user registration and login.
+- `GameController`: Manages all chess game actions (create, sync, move, resign, draw offers, timeouts, Elo calculation, etc.).
+- `QueueController`: Handles matchmaking queue logic for pairing players.
+- `MeController`: Provides endpoints for current user info, active game, recent games, and ratings.
+- `LeaderboardController`: Returns leaderboards for a given time class.
+- `ModeController`: Lists available time controls (modes).
+- `FormController`: Example form handler for custom endpoints.
 
 ## Getting Started
 
@@ -40,37 +53,37 @@ This is a PHP Laravel backend for a Chess multiplayer website. It provides user 
    php artisan serve
    ```
 
-## API Endpoints
+## API Endpoints (Highlights)
 
 - `POST /api/register` — Register a new user
 - `POST /api/login` — Login and receive a token
-- `POST /api/form-endpoint` — Example form handler
+- `POST /api/queue/join` — Join the matchmaking queue
+- `POST /api/queue/leave` — Leave the matchmaking queue
+- `GET /api/game/{id}` — Get game state
+- `POST /api/game/{id}/move` — Make a move
+- `POST /api/game/{id}/resign` — Resign from a game
+- `POST /api/game/{id}/offer-draw` — Offer a draw
+- `POST /api/game/{id}/accept-draw` — Accept a draw offer
+- `GET /api/leaderboard` — Get leaderboard for a time class
+- `GET /api/me` — Get current user info
+- `GET /api/me/active-game` — Get current user's active game
+- `GET /api/me/recent-games` — Get recent games for the user
 
-> **Note:** Endpoints for chess games, moves, and matchmaking are ready to be added in `routes/api.php` and corresponding controllers.
+> **Note:** See `routes/api.php` and controller files for the full set of endpoints and parameters.
 
 ## Project Structure
 
-- `app/Http/Controllers/` — API controllers (e.g., `AuthController`, `FormController`)
-- `app/Models/` — Eloquent models (e.g., `User`)
+- `app/Http/Controllers/` — API controllers (see above)
+- `app/Models/` — Eloquent models (e.g., `User`, `Game`, `GameMove`, etc.)
 - `routes/api.php` — API route definitions
 - `database/migrations/` — Database schema
 
 ## Extending for Chess
 
-To add chess-specific features:
-- Create models (e.g., `Game`, `Move`)
-- Add controllers for game logic and matchmaking
-- Define new API routes in `routes/api.php`
-- Use Laravel events/broadcasting for real-time play
-
-## Testing
-Run tests with:
-```bash
-php artisan test
-```
+- Add new endpoints in `routes/api.php` and implement logic in the appropriate controller.
+- Use Eloquent models for new data types (e.g., tournaments, chat).
+- See `GameController` and `QueueController` for examples of chess-specific logic.
 
 ## License
-MIT
 
----
-Built with Laravel for modern multiplayer chess experiences.
+MIT
