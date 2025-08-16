@@ -18,23 +18,30 @@ final class GameController extends Controller
     {
         $g = Game::with(['white', 'black', 'timeControl'])->findOrFail($id);
         $moves = GameMove::where('game_id', $id)->orderBy('ply')->get();
-        return response()->json(['game' => $g, 'moves' => $moves]);
+
+        [$toMove, $toMoveUserId] = $this->computeToMove($g);
+
+        return response()->json([
+            'game' => $g,
+            'moves' => $moves,
+            'to_move' => $toMove,               // 'white' | 'black' | null
+            'to_move_user_id' => $toMoveUserId, // int | null
+        ]);
     }
 
-    public function sync(int $id, Request $r)
+    private function computeToMove(Game $g): array
     {
-        $since = (int) $r->query('since', 0);
-        $g = Game::with(['white', 'black', 'timeControl'])->findOrFail($id);
-        $new = GameMove::where('game_id', $id)->where('ply', '>', $since)->orderBy('ply')->get();
-
         $activeColor = null;
+
         if ($g->status === 'active') {
             if ($g->fen === 'startpos') {
                 $activeColor = 'w';
             } else {
-                $parts = explode(' ', (string) $g->fen);
-                $activeColor = $parts[1] ?? null; // standard FEN: "<pieces> <activeColor> ..."
-                if ($activeColor !== 'w' && $activeColor !== 'b') {
+                $parts = explode(' ', (string) $g->fen); // "<pieces> <activeColor> ..."
+                $c = $parts[1] ?? null;
+                if ($c === 'w' || $c === 'b') {
+                    $activeColor = $c;
+                } else {
                     $activeColor = ($g->move_index % 2 === 0) ? 'w' : 'b';
                 }
             }
@@ -44,6 +51,17 @@ final class GameController extends Controller
         $toMoveUserId = $activeColor
             ? ($activeColor === 'w' ? (int) $g->white_id : (int) $g->black_id)
             : null;
+
+        return [$toMove, $toMoveUserId];
+    }
+
+    public function sync(int $id, Request $r)
+    {
+        $since = (int) $r->query('since', 0);
+        $g = Game::with(['white', 'black', 'timeControl'])->findOrFail($id);
+        $new = GameMove::where('game_id', $id)->where('ply', '>', $since)->orderBy('ply')->get();
+
+        [$toMove, $toMoveUserId] = $this->computeToMove($g);
 
         return response()->json([
             'status' => $g->status,
