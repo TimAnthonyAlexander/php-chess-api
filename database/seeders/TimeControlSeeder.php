@@ -19,6 +19,10 @@ class TimeControlSeeder extends Seeder
             ['slug' => '3+2', 'initial_sec' => 180, 'increment_ms' => 2000, 'time_class' => 'blitz', 'created_at' => now(), 'updated_at' => now()],
             ['slug' => '5+0', 'initial_sec' => 300, 'increment_ms' => 0, 'time_class' => 'blitz', 'created_at' => now(), 'updated_at' => now()],
             ['slug' => '10+0', 'initial_sec' => 600, 'increment_ms' => 0, 'time_class' => 'rapid', 'created_at' => now(), 'updated_at' => now()],
+            ['slug' => '15+0', 'initial_sec' => 900, 'increment_ms' => 0, 'time_class' => 'rapid', 'created_at' => now(), 'updated_at' => now()],
+            ['slug' => '30+0', 'initial_sec' => 1800, 'increment_ms' => 0, 'time_class' => 'classical', 'created_at' => now(), 'updated_at' => now()],
+            ['slug' => '60+0', 'initial_sec' => 3600, 'increment_ms' => 0, 'time_class' => 'classical', 'created_at' => now(), 'updated_at' => now()],
+            ['slug' => '120+0', 'initial_sec' => 7200, 'increment_ms' => 0, 'time_class' => 'classical', 'created_at' => now(), 'updated_at' => now()],
         ]);
     }
 }
