@@ -35,6 +35,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/games/{id}/draw/offer', [GameController::class, 'offerDraw']);
     Route::post('/games/{id}/draw/accept', [GameController::class, 'acceptDraw']);
     
+    // Debug endpoint - for debugging time issues
+    Route::get('/games/debug/time', [GameController::class, 'debugTime']);
+    
     // Leaderboard
     Route::get('/leaderboard', [LeaderboardController::class, 'leaderboard']);
 });
