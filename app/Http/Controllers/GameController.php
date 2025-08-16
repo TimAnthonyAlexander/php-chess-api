@@ -23,9 +23,28 @@ final class GameController extends Controller
 
     public function sync(int $id, Request $r)
     {
-        $since = (int) $r->query('since', 0); // last known ply
+        $since = (int) $r->query('since', 0);
         $g = Game::with(['white', 'black', 'timeControl'])->findOrFail($id);
         $new = GameMove::where('game_id', $id)->where('ply', '>', $since)->orderBy('ply')->get();
+
+        $activeColor = null;
+        if ($g->status === 'active') {
+            if ($g->fen === 'startpos') {
+                $activeColor = 'w';
+            } else {
+                $parts = explode(' ', (string) $g->fen);
+                $activeColor = $parts[1] ?? null; // standard FEN: "<pieces> <activeColor> ..."
+                if ($activeColor !== 'w' && $activeColor !== 'b') {
+                    $activeColor = ($g->move_index % 2 === 0) ? 'w' : 'b';
+                }
+            }
+        }
+
+        $toMove = $activeColor ? ($activeColor === 'w' ? 'white' : 'black') : null;
+        $toMoveUserId = $activeColor
+            ? ($activeColor === 'w' ? (int) $g->white_id : (int) $g->black_id)
+            : null;
+
         return response()->json([
             'status' => $g->status,
             'result' => $g->result,
@@ -37,7 +56,10 @@ final class GameController extends Controller
             'white' => $g->white,
             'black' => $g->black,
             'timeControl' => $g->timeControl,
-            'moves' => $new
+            'moves' => $new,
+            'since' => $since,
+            'to_move' => $toMove,                // 'white' | 'black' | null
+            'to_move_user_id' => $toMoveUserId,  // int | null
         ]);
     }
 
