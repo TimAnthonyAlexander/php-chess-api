@@ -16,17 +16,17 @@ return new class extends Migration
             $table->foreignId('time_control_id')->constrained('time_controls');
             $table->foreignId('white_id')->constrained('users');
             $table->foreignId('black_id')->constrained('users');
-            $table->string('status'); // queued|active|finished|aborted
+            $table->string('status');            // queued|active|finished|aborted
             $table->string('result')->nullable(); // '1-0','0-1','1/2-1/2'
             $table->string('reason')->nullable(); // checkmate|resign|timeout|draw|abort
-            $table->text('fen')->default('startpos');
+            $table->string('fen', 120)->default('startpos'); // was text -> string
             $table->unsignedInteger('move_index')->default(0);
-            $table->bigInteger('white_time_ms')->unsigned();
-            $table->bigInteger('black_time_ms')->unsigned();
+            $table->unsignedBigInteger('white_time_ms');
+            $table->unsignedBigInteger('black_time_ms');
             $table->timestamp('last_move_at')->nullable();
             $table->unsignedInteger('lock_version')->default(0);
             $table->timestamps();
-            $table->index(['status','updated_at']);
+            $table->index(['status', 'updated_at']);
         });
     }
 
