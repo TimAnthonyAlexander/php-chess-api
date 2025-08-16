@@ -60,6 +60,7 @@ final class GameController extends Controller
             ]
         ]);
     }
+
     public function show(int $id)
     {
         $g = Game::with(['white', 'black', 'timeControl'])->findOrFail($id);
@@ -117,7 +118,7 @@ final class GameController extends Controller
             $elapsed = $now->diffInMilliseconds($g->last_move_at);
             $remaining = $toMoveIsWhite ? $g->white_time_ms : $g->black_time_ms;
             
-            \Log::debug('Sync time check', [
+            Log::debug('Sync time check', [
                 'game_id' => $g->id,
                 'move_index' => $g->move_index,
                 'to_move_is_white' => $toMoveIsWhite,
@@ -161,7 +162,7 @@ final class GameController extends Controller
     {
         $user = $r->user();
         $data = $r->validate([
-            'uci' => 'required|string', // e2e4, e7e8q
+            'uci' => 'required|string',
             'lock_version' => 'required|integer',
         ]);
 
@@ -175,218 +176,67 @@ final class GameController extends Controller
                 return response()->json(['error' => 'version'], 409);
             }
 
-            // Turn validation
-            $toMoveId = ($g->move_index % 2 === 0) ? $g->white_id : $g->black_id;
-            if ($user->id !== $toMoveId) {
+            [$toMove, $toMoveUserId] = $this->computeToMove($g);
+            if (!$toMoveUserId || (int)$user->id !== (int)$toMoveUserId) {
                 return response()->json(['error' => 'not your turn'], 403);
             }
 
-            // CRITICAL: Fetch the CURRENT time values directly from database
-            $currentTimes = DB::table('games')
-                ->where('id', $g->id)
-                ->select(['white_time_ms', 'black_time_ms'])
-                ->first();
-                
-            // Use the database values, not the model values
-            $whiteTimeMs = (int)$currentTimes->white_time_ms;
-            $blackTimeMs = (int)$currentTimes->black_time_ms;
-            
-            // Time control
             $now = now();
             $elapsedMs = (int) max(0, $now->diffInMilliseconds($g->last_move_at ?? $now));
             $tc = TimeControl::findOrFail($g->time_control_id);
-            
-            Log::debug('RAW TIME VALUES FROM DB', [
-                'game_id' => $g->id,
-                'white_time_ms_from_db' => $whiteTimeMs,
-                'black_time_ms_from_db' => $blackTimeMs,
-                'white_time_ms_from_model' => $g->white_time_ms,
-                'black_time_ms_from_model' => $g->black_time_ms,
-                'elapsed_ms' => $elapsedMs
-            ]);
 
-            // Calculate new time values based on move and elapsed time
-            $newWhiteTimeMs = $whiteTimeMs;
-            $newBlackTimeMs = $blackTimeMs;
-            
-            // Detailed time calculation - White's move (even index)
-            if ($g->move_index % 2 === 0) {
-                Log::debug('White to move time calc', [
-                    'white_time_before' => $whiteTimeMs,
-                    'elapsed_ms' => $elapsedMs
-                ]);
-                
-                if ($elapsedMs >= $whiteTimeMs) {
-                    return $this->timeout($g, 'black');
-                }
-                
-                // Subtract elapsed time for white
-                $newWhiteTimeMs = (int) max(0, $whiteTimeMs - $elapsedMs);
-                
-                // Add increment for white
-                $newWhiteTimeMs += (int)$tc->increment_ms;
-                
-                Log::debug('White time after calculation', [
-                    'new_white_time_ms' => $newWhiteTimeMs
-                ]);
-            } 
-            // Black's move (odd index)
-            else {
-                Log::debug('Black to move time calc', [
-                    'black_time_before' => $blackTimeMs,
-                    'elapsed_ms' => $elapsedMs
-                ]);
-                
-                if ($elapsedMs >= $blackTimeMs) {
-                    return $this->timeout($g, 'white');
-                }
-                
-                // Subtract elapsed time for black
-                $newBlackTimeMs = (int) max(0, $blackTimeMs - $elapsedMs);
-                
-                // Add increment for black
-                $newBlackTimeMs += (int)$tc->increment_ms;
-                
-                Log::debug('Black time after calculation', [
-                    'new_black_time_ms' => $newBlackTimeMs
-                ]);
-            }
-            
-            // Debug logging - after time update
-            \Log::debug('Time after update', [
-                'white_time_ms' => $g->white_time_ms,
-                'black_time_ms' => $g->black_time_ms
-            ]);
+            $whiteMs = (int)$g->white_time_ms;
+            $blackMs = (int)$g->black_time_ms;
 
-            // Build board from current position
-            if ($g->fen === 'startpos') {
-                $board = new Board();
+            if ($toMove === 'white') {
+                if ($elapsedMs >= $whiteMs) return $this->timeout($g, 'black');
+                $whiteMs = $whiteMs - $elapsedMs + (int)$tc->increment_ms;
             } else {
-                $board = FenToBoardFactory::create($g->fen);
+                if ($elapsedMs >= $blackMs) return $this->timeout($g, 'white');
+                $blackMs = $blackMs - $elapsedMs + (int)$tc->increment_ms;
             }
 
-            // Parse incoming UCI
-            $uci = strtolower($data['uci']);      // e.g. e2e4, e7e8q
+            $board = $g->fen === 'startpos' ? new Board() : FenToBoardFactory::create($g->fen);
+
+            $uci = strtolower($data['uci']);
             $from = substr($uci, 0, 2);
             $to = substr($uci, 2, 2);
             $promotion = strlen($uci) === 5 ? substr($uci, 4, 1) : null;
-
-            // Apply move in LAN (UCI) for the side to move
-            $color = ($g->move_index % 2 === 0) ? 'w' : 'b';
+            $color = $toMove === 'white' ? 'w' : 'b';
 
             try {
-                // Throws on illegal move; if it doesn’t, returns void.
                 $board->playLan($color, $uci);
             } catch (\Throwable $e) {
                 return response()->json(['error' => 'illegal'], 422);
             }
 
-            // Last move info from history (includes SAN)
             $last = end($board->history) ?: null;
             $san = is_array($last) && isset($last['pgn']) ? $last['pgn'] : null;
-
             $fenAfter = $board->toFen();
 
-            // NOTE: Increment is now applied directly during the time calculation above
-            Log::debug('FINAL TIME VALUES TO SAVE', [
-                'new_white_time_ms' => $newWhiteTimeMs,
-                'new_black_time_ms' => $newBlackTimeMs,
+            $g->white_time_ms = $whiteMs;
+            $g->black_time_ms = $blackMs;
+            $g->move_index = $g->move_index + 1;
+            $g->fen = $fenAfter;
+            $g->last_move_at = $now;
+            $g->lock_version = $g->lock_version + 1;
+            $g->save();
+
+            GameMove::create([
+                'game_id' => $g->id,
+                'ply' => $g->move_index,
+                'by_user_id' => $user->id,
+                'uci' => $uci,
+                'san' => $san,
+                'from_sq' => $from,
+                'to_sq' => $to,
+                'promotion' => $promotion,
+                'fen_after' => $fenAfter,
+                'white_time_ms_after' => $whiteMs,
+                'black_time_ms_after' => $blackMs,
             ]);
 
-            // Persist game state
-            $g->move_index += 1;
-            $g->fen = $fenAfter;
-            $g->last_move_at = $now;
-            $g->lock_version += 1;
-            
-            // COMPLETELY SEPARATE TRANSACTION for updating time values
-            $timeUpdateResult = DB::transaction(function() use ($g, $newWhiteTimeMs, $newBlackTimeMs, $fenAfter, $now) {
-                // Super direct raw query to update time values
-                $updated = DB::update(
-                    'UPDATE games SET white_time_ms = ?, black_time_ms = ?, move_index = ?, fen = ?, last_move_at = ?, lock_version = ? WHERE id = ?', 
-                    [$newWhiteTimeMs, $newBlackTimeMs, $g->move_index + 1, $fenAfter, $now, $g->lock_version + 1, $g->id]
-                );
-                
-                // Check if update worked
-                if ($updated !== 1) {
-                    Log::error('Failed to update game times', [
-                        'game_id' => $g->id,
-                        'rows_affected' => $updated
-                    ]);
-                    return false;
-                }
-                
-                // Verify the actual values in the database after update
-                $verifyGame = DB::table('games')->where('id', $g->id)->first();
-                Log::debug('VERIFICATION after direct DB update', [
-                    'white_time_ms_saved' => $verifyGame->white_time_ms,
-                    'black_time_ms_saved' => $verifyGame->black_time_ms,
-                    'expected_white_time_ms' => $newWhiteTimeMs,
-                    'expected_black_time_ms' => $newBlackTimeMs,
-                    'success' => (
-                        $verifyGame->white_time_ms == $newWhiteTimeMs && 
-                        $verifyGame->black_time_ms == $newBlackTimeMs
-                    )
-                ]);
-                
-                return $verifyGame;
-            }, 5);
-            
-            if ($timeUpdateResult === false) {
-                return response()->json(['error' => 'Failed to update game times'], 500);
-            }
-            
-            // Update local variables for subsequent code
-            $g->move_index += 1;
-            $g->fen = $fenAfter;
-            $g->last_move_at = $now;
-            $g->lock_version += 1;
-            $g->white_time_ms = $newWhiteTimeMs;
-            $g->black_time_ms = $newBlackTimeMs;
-
-            // SEPARATE TRANSACTION for game move insertion
-            $moveInsertResult = DB::transaction(function() use ($g, $user, $uci, $san, $from, $to, $promotion, $fenAfter, $now, $newWhiteTimeMs, $newBlackTimeMs) {
-                // Raw SQL insert for the game move
-                $result = DB::insert(
-                    'INSERT INTO game_moves (game_id, ply, by_user_id, uci, san, from_sq, to_sq, promotion, fen_after, white_time_ms_after, black_time_ms_after, moved_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                    [$g->id, $g->move_index, $user->id, $uci, $san, $from, $to, $promotion, $fenAfter, $newWhiteTimeMs, $newBlackTimeMs, $now]
-                );
-                
-                if (!$result) {
-                    Log::error('Failed to insert game move', [
-                        'game_id' => $g->id,
-                        'ply' => $g->move_index
-                    ]);
-                    return false;
-                }
-                
-                // Verify the move was inserted with correct time values
-                $verifyMove = DB::table('game_moves')
-                    ->where('game_id', $g->id)
-                    ->where('ply', $g->move_index)
-                    ->first();
-                
-                Log::debug('VERIFICATION after game move insert', [
-                    'white_time_ms_after_saved' => $verifyMove->white_time_ms_after,
-                    'black_time_ms_after_saved' => $verifyMove->black_time_ms_after,
-                    'expected_white_time_ms' => $newWhiteTimeMs,
-                    'expected_black_time_ms' => $newBlackTimeMs,
-                    'success' => (
-                        $verifyMove->white_time_ms_after == $newWhiteTimeMs && 
-                        $verifyMove->black_time_ms_after == $newBlackTimeMs
-                    )
-                ]);
-                
-                return $verifyMove;
-            }, 5);
-            
-            if ($moveInsertResult === false) {
-                return response()->json(['error' => 'Failed to insert game move'], 500);
-            }
-
-            // Game end checks
             if (method_exists($board, 'isMate') && $board->isMate()) {
-                // After a successful move, odd ply => White just moved.
                 $result = ($g->move_index % 2 === 1) ? '1-0' : '0-1';
                 return $this->finish($g, $result, 'checkmate');
             }
