@@ -128,7 +128,7 @@ final class QueueController extends Controller
                 'move_index'      => 0,
                 'white_time_ms'   => $initial,
                 'black_time_ms'   => $initial,
-                'last_move_at'    => now(),
+                'last_move_at'    => null, // Will be set when first move is made
             ]);
 
             return response()->json(['status' => 'matched', 'game_id' => $game->id]);

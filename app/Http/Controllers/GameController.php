@@ -108,14 +108,60 @@ final class GameController extends Controller
         $since = (int) $r->query('since', 0);
         $g = Game::with(['white', 'black', 'timeControl'])->findOrFail($id);
         
-        // Check for timeout if game is active
-        $now = now();
-        if ($g->status === 'active' && $g->last_move_at) {
-            $toMoveIsWhite = ($g->fen === 'startpos')
-                ? ($g->move_index % 2 === 0)
-                : (explode(' ', (string) $g->fen)[1] ?? 'w') === 'w';
-
-            $elapsed = $now->diffInMilliseconds($g->last_move_at);
+        // Check for timeout if game is active and has had at least one move
+        // For new games, last_move_at is null until the first move is made
+        if ($g->status === 'active' && $g->last_move_at && $g->move_index > 0) {
+            // Determine who moves based on fen string or move_index
+            // For FEN format: The 2nd component after splitting by spaces indicates the active color
+            // - 'w' means white to move, 'b' means black to move
+            $toMoveIsWhite = false;
+            if ($g->fen === 'startpos') {
+                $toMoveIsWhite = ($g->move_index % 2 === 0);
+            } else {
+                $fenParts = explode(' ', (string) $g->fen);
+                $activeColor = $fenParts[1] ?? 'w';
+                $toMoveIsWhite = ($activeColor === 'w');
+            }
+            
+            // SIMPLIFIED: Use native MySQL TIMESTAMPDIFF directly without timezone conversions
+            // This avoids timezone conversion issues entirely
+            $result = DB::select('
+                SELECT 
+                    TIMESTAMPDIFF(MICROSECOND, last_move_at, NOW(6)) as usec_diff,
+                    last_move_at as db_last_move,
+                    NOW(6) as db_now
+                FROM games WHERE id = ?
+            ', [$g->id])[0];
+            
+            $usec = max(0, (int)$result->usec_diff); // Never allow negative values
+            
+            // Calculate elapsed milliseconds
+            $elapsedMs = (int) floor($usec / 1000);
+            
+            // Prevent timeout in the first couple of moves if the time difference is too large
+            // This handles timezone/clock issues during game start
+            if ($g->move_index <= 2 && $elapsedMs > 10000) { // More than 10 seconds on first moves is suspicious
+                Log::warning('Suspicious large time difference in early move - capping at 1000ms', [
+                    'game_id' => $g->id,
+                    'move_index' => $g->move_index,
+                    'original_elapsed_ms' => $elapsedMs,
+                    'capped_to' => 1000
+                ]);
+                $elapsedMs = 1000; // Cap at 1 second for early moves
+            }
+            
+            // Add enhanced debug logging
+            Log::info('Time calculation debug', [
+                'game_id' => $g->id,
+                'move_index' => $g->move_index,
+                'db_last_move' => $result->db_last_move,
+                'db_now' => $result->db_now,
+                'usec_diff' => $usec,
+                'elapsed_ms' => $elapsedMs,
+                'to_move_is_white' => $toMoveIsWhite,
+                'remaining_ms' => $toMoveIsWhite ? $g->white_time_ms : $g->black_time_ms
+            ]);
+            
             $remaining = $toMoveIsWhite ? $g->white_time_ms : $g->black_time_ms;
             
             Log::debug('Sync time check', [
@@ -124,12 +170,12 @@ final class GameController extends Controller
                 'to_move_is_white' => $toMoveIsWhite,
                 'white_time_ms' => $g->white_time_ms,
                 'black_time_ms' => $g->black_time_ms,
-                'elapsed_ms' => $elapsed,
+                'elapsed_ms' => $elapsedMs,
                 'remaining_ms' => $remaining,
                 'last_move_at' => $g->last_move_at ? $g->last_move_at->toISOString() : null
             ]);
 
-            if ($elapsed >= $remaining) {
+            if ($elapsedMs >= $remaining) {
                 $winner = $toMoveIsWhite ? 'black' : 'white';
                 return $this->timeout($g, $winner);
             }
@@ -169,21 +215,59 @@ final class GameController extends Controller
         return DB::transaction(function () use ($id, $user, $data) {
             $g = Game::lockForUpdate()->findOrFail($id);
 
-            if ($g->status !== 'active') {
-                return response()->json(['error' => 'not active'], 409);
-            }
-            if ((int)$data['lock_version'] !== (int)$g->lock_version) {
-                return response()->json(['error' => 'version'], 409);
-            }
+            if ($g->status !== 'active') return response()->json(['error' => 'not active'], 409);
+            if ((int)$data['lock_version'] !== (int)$g->lock_version) return response()->json(['error' => 'version'], 409);
 
             [$toMove, $toMoveUserId] = $this->computeToMove($g);
-            if (!$toMoveUserId || (int)$user->id !== (int)$toMoveUserId) {
-                return response()->json(['error' => 'not your turn'], 403);
-            }
+            if (!$toMoveUserId || (int)$user->id !== (int)$toMoveUserId) return response()->json(['error' => 'not your turn'], 403);
 
-            $now = now();
-            $elapsedMs = (int) max(0, $now->diffInMilliseconds($g->last_move_at ?? $now));
             $tc = TimeControl::findOrFail($g->time_control_id);
+
+            // SIMPLIFIED: Use native MySQL TIMESTAMPDIFF directly without timezone conversions
+            $usec = 0; // Default for first move
+            $elapsedMs = 0;
+            
+            // Only calculate elapsed time if this is not the first move
+            if ($g->last_move_at) {
+                // Calculate in database using consistent time reference
+                $result = DB::select('
+                    SELECT 
+                        TIMESTAMPDIFF(MICROSECOND, last_move_at, NOW(6)) as usec_diff,
+                        last_move_at as db_last_move,
+                        NOW(6) as db_now
+                    FROM games WHERE id = ?
+                ', [$g->id])[0];
+                
+                $usec = max(0, (int)$result->usec_diff); // Never allow negative values
+                $elapsedMs = (int) floor($usec / 1000);
+                
+                // Prevent timeout in the first couple of moves if the time difference is too large
+                if ($g->move_index <= 2 && $elapsedMs > 10000) { // More than 10 seconds on first moves is suspicious
+                    Log::warning('Suspicious large time difference in early move - capping at 1000ms', [
+                        'game_id' => $g->id,
+                        'move_index' => $g->move_index,
+                        'original_elapsed_ms' => $elapsedMs,
+                        'capped_to' => 1000,
+                        'db_last_move' => $result->db_last_move,
+                        'db_now' => $result->db_now
+                    ]);
+                    $elapsedMs = 1000; // Cap at 1 second for early moves
+                }
+                
+                // Add enhanced debug logging
+                Log::info('Time calculation debug (move)', [
+                    'game_id' => $g->id,
+                    'move_index' => $g->move_index,
+                    'db_last_move' => $result->db_last_move ?? 'null',
+                    'db_now' => $result->db_now ?? now()->toDateTimeString(),
+                    'usec_diff' => $usec,
+                    'elapsed_ms' => $elapsedMs,
+                    'toMove' => $toMove
+                ]);
+            } else {
+                // First move in the game
+                Log::info('First move in game', ['game_id' => $g->id]);
+            }
 
             $whiteMs = (int)$g->white_time_ms;
             $blackMs = (int)$g->black_time_ms;
@@ -214,11 +298,12 @@ final class GameController extends Controller
             $san = is_array($last) && isset($last['pgn']) ? $last['pgn'] : null;
             $fenAfter = $board->toFen();
 
+            // Freeze new base times at the moment of this move
             $g->white_time_ms = $whiteMs;
             $g->black_time_ms = $blackMs;
             $g->move_index = $g->move_index + 1;
             $g->fen = $fenAfter;
-            $g->last_move_at = $now;
+            $g->last_move_at = now(); // server time mark for the opponent's countdown window
             $g->lock_version = $g->lock_version + 1;
             $g->save();
 

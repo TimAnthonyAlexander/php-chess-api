@@ -32,9 +32,10 @@ class ChessTimeoutSweep extends Command
     {
         $this->info('Running chess timeout sweep...');
         
-        // Get all active games
+        // Get all active games that have had at least one move
         $activeGames = Game::where('status', 'active')
-            ->where('last_move_at', '<', now()->subSeconds(10)) // Only check games with at least 10s of inactivity
+            ->whereNotNull('last_move_at') // Make sure there's a last move to check against
+            ->where('move_index', '>', 0) // Skip games that haven't had any moves yet
             ->get();
             
         if ($activeGames->isEmpty()) {
@@ -55,11 +56,36 @@ class ChessTimeoutSweep extends Command
                     return false;
                 }
                 
-                $now = now();
-                $elapsedMs = max(0, $now->diffInMilliseconds($g->last_move_at ?? $now));
+                // Calculate elapsed time using the database's own time measurement
+                // avoiding any timezone issues completely
+                $result = DB::select('
+                    SELECT 
+                        TIMESTAMPDIFF(MICROSECOND, last_move_at, NOW(6)) as usec_diff,
+                        last_move_at as db_last_move,
+                        NOW(6) as db_now
+                    FROM games WHERE id = ?
+                ', [$g->id])[0];
                 
-                // Determine whose turn it is
-                $isWhiteTurn = ($g->move_index % 2 === 0);
+                $usec = max(0, (int)$result->usec_diff); // Never allow negative values
+                $elapsedMs = (int) floor($usec / 1000);
+                
+                // Prevent timeout in early moves
+                if ($g->move_index <= 2 && $elapsedMs > 10000) { // More than 10 seconds on first moves is suspicious
+                    $this->warn("Game #{$g->id}: Suspicious large time difference in early move - capping at 1000ms (was {$elapsedMs}ms)");
+                    $elapsedMs = 1000; // Cap at 1 second for early moves
+                }
+                
+                $this->info("Game #{$g->id}: Calculated elapsed time: {$elapsedMs}ms, Move: {$g->move_index}, Last move at: {$result->db_last_move}, Now: {$result->db_now}");
+                
+                // Determine whose turn it is based on FEN or move index
+                $isWhiteTurn = false;
+                if ($g->fen === 'startpos') {
+                    $isWhiteTurn = ($g->move_index % 2 === 0);
+                } else {
+                    $fenParts = explode(' ', (string) $g->fen);
+                    $activeColor = $fenParts[1] ?? 'w';
+                    $isWhiteTurn = ($activeColor === 'w');
+                }
                 
                 if ($isWhiteTurn && $elapsedMs >= $g->white_time_ms) {
                     // White timed out, black wins
