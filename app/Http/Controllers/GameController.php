@@ -2,15 +2,13 @@
 
 namespace App\Http\Controllers;
 
+use Chess\Variant\Classical\Board;
+use Chess\Variant\Classical\FenToBoardFactory;
 use App\Models\Game;
 use App\Models\GameAnalysis;
 use App\Models\GameMove;
 use App\Models\PlayerRating;
 use App\Models\TimeControl;
-use ChessLab\Engine\FEN;
-use ChessLab\Engine\Move;
-use ChessLab\Engine\Board;
-use ChessLab\Engine\IO\UCI;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -48,16 +46,26 @@ final class GameController extends Controller
         $user = $r->user();
         $data = $r->validate([
             'uci' => 'required|string', // e2e4, e7e8q
-            'lock_version' => 'required|integer'
+            'lock_version' => 'required|integer',
         ]);
+
         return DB::transaction(function () use ($id, $user, $data) {
             $g = Game::lockForUpdate()->findOrFail($id);
-            if ($g->status !== 'active') return response()->json(['error' => 'not active'], 409);
-            if ((int)$data['lock_version'] !== (int)$g->lock_version) return response()->json(['error' => 'version'], 409);
 
+            if ($g->status !== 'active') {
+                return response()->json(['error' => 'not active'], 409);
+            }
+            if ((int)$data['lock_version'] !== (int)$g->lock_version) {
+                return response()->json(['error' => 'version'], 409);
+            }
+
+            // Turn validation
             $toMoveId = ($g->move_index % 2 === 0) ? $g->white_id : $g->black_id;
-            if ($user->id !== $toMoveId) return response()->json(['error' => 'not your turn'], 403);
+            if ($user->id !== $toMoveId) {
+                return response()->json(['error' => 'not your turn'], 403);
+            }
 
+            // Time control
             $now = now();
             $elapsedMs = max(0, $now->diffInMilliseconds($g->last_move_at ?? $now));
             $tc = TimeControl::findOrFail($g->time_control_id);
@@ -70,47 +78,40 @@ final class GameController extends Controller
                 $g->black_time_ms -= $elapsedMs;
             }
 
-            // Setup the board position
-            $board = new Board();
-            if ($g->fen !== 'startpos') {
-                $board = FEN::toBoard($g->fen);
-            }
-            
-            // Process previous moves from the database to reach current position
-            $previousMoves = GameMove::where('game_id', $g->id)
-                ->orderBy('ply')
-                ->get();
-                
-            foreach ($previousMoves as $prevMove) {
-                $uciMove = new Move();
-                $uciMove->fromUci($prevMove->uci);
-                $board->playMove($uciMove);
+            // Build board from current position
+            if ($g->fen === 'startpos') {
+                $board = new Board();
+            } else {
+                $board = FenToBoardFactory::create($g->fen);
             }
 
-            // Try to apply the new move
-            $uci = strtolower($data['uci']);
+            // Parse incoming UCI
+            $uci = strtolower($data['uci']);      // e.g. e2e4, e7e8q
             $from = substr($uci, 0, 2);
             $to = substr($uci, 2, 2);
             $promotion = strlen($uci) === 5 ? substr($uci, 4, 1) : null;
-            
-            // Create and validate the move
-            $move = new Move();
-            $move->fromUci($uci);
-            
-            if (!$board->isLegal($move)) {
+
+            // Apply move in LAN (UCI) for the side to move
+            $color = ($g->move_index % 2 === 0) ? 'w' : 'b';
+
+            try {
+                // Throws on illegal move; if it doesn’t, returns void.
+                $board->playLan($color, $uci);
+            } catch (\Throwable $e) {
                 return response()->json(['error' => 'illegal'], 422);
             }
-            
-            // Play the move
-            $board->playMove($move);
-            
-            // Get SAN notation
-            $san = UCI::toSan($board, $move);
-            $fenAfter = FEN::fromBoard($board);
 
+            // Last move info from history (includes SAN)
+            $last = end($board->history) ?: null;
+            $san = is_array($last) && isset($last['pgn']) ? $last['pgn'] : null;
+
+            $fenAfter = $board->toFen();
+
+            // Increment time with increment
             if ($g->move_index % 2 === 0) $g->white_time_ms += $tc->increment_ms;
             else $g->black_time_ms += $tc->increment_ms;
 
+            // Persist game state
             $g->move_index += 1;
             $g->fen = $fenAfter;
             $g->last_move_at = $now;
@@ -130,20 +131,25 @@ final class GameController extends Controller
                 'white_time_ms_after' => $g->white_time_ms,
                 'black_time_ms_after' => $g->black_time_ms,
             ]);
-            
-            // Check for game-ending conditions
-            if ($board->isCheckmate()) {
-                return $this->finish($g, $g->move_index % 2 === 1 ? '1-0' : '0-1', 'checkmate');
+
+            // Game end checks
+            if (method_exists($board, 'isMate') && $board->isMate()) {
+                // After a successful move, odd ply => White just moved.
+                $result = ($g->move_index % 2 === 1) ? '1-0' : '0-1';
+                return $this->finish($g, $result, 'checkmate');
             }
-            
-            if ($board->isStalemate() || $board->isDraw()) {
+
+            if (
+                (method_exists($board, 'isStalemate') && $board->isStalemate()) ||
+                (method_exists($board, 'isFivefoldRepetition') && $board->isFivefoldRepetition())
+            ) {
                 return $this->finish($g, '1/2-1/2', 'draw');
             }
 
             return response()->json(['ok' => true, 'lock_version' => $g->lock_version]);
         }, 3);
     }
-    
+
     public function resign(int $id, Request $r)
     {
         $user = $r->user();
@@ -152,31 +158,31 @@ final class GameController extends Controller
             if ($g->status !== 'active') {
                 return response()->json(['error' => 'game not active'], 409);
             }
-            
+
             $result = $user->id === $g->white_id ? '0-1' : '1-0';
             return $this->finish($g, $result, 'resign');
         });
     }
-    
+
     public function offerDraw(int $id, Request $r)
     {
         $user = $r->user();
         $g = Game::findOrFail($id);
-        
+
         if ($g->status !== 'active') {
             return response()->json(['error' => 'game not active'], 409);
         }
-        
+
         if ($user->id !== $g->white_id && $user->id !== $g->black_id) {
             return response()->json(['error' => 'not your game'], 403);
         }
-        
+
         // In a real app, you'd store the draw offer in a separate table
         // and check for it in the acceptDraw method
-        
+
         return response()->json(['status' => 'draw offered']);
     }
-    
+
     public function acceptDraw(int $id, Request $r)
     {
         $user = $r->user();
@@ -185,14 +191,14 @@ final class GameController extends Controller
             if ($g->status !== 'active') {
                 return response()->json(['error' => 'game not active'], 409);
             }
-            
+
             if ($user->id !== $g->white_id && $user->id !== $g->black_id) {
                 return response()->json(['error' => 'not your game'], 403);
             }
-            
+
             // In a real app, you'd check if there's an actual draw offer from the opponent
             // For now, we'll just accept any draw acceptance request
-            
+
             return $this->finish($g, '1/2-1/2', 'draw');
         });
     }
