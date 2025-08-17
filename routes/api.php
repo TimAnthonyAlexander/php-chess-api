@@ -20,6 +20,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Queue management
     Route::post('/queue/join', [QueueController::class, 'join']);
     Route::post('/queue/leave', [QueueController::class, 'leave']);
+    Route::post('/queue/matched-human', [QueueController::class, 'matchedHuman']);
     
     // User specific
     Route::get('/me', [MeController::class, 'currentUser']);

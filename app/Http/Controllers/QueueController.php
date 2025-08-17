@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Jobs\CreateBotFallback;
 use App\Models\PlayerRating;
 use App\Models\QueueEntry;
 use App\Models\Game;
@@ -31,12 +32,16 @@ final class QueueController extends Controller
         // 2) Only create row if missing; do NOT reset joined_at on every poll.
         $qe = QueueEntry::where(['user_id' => $user->id, 'time_control_id' => $tc->id])->first();
         if (!$qe) {
-            QueueEntry::create([
+            $qe = QueueEntry::create([
                 'user_id'         => $user->id,
                 'time_control_id' => $tc->id,
                 'snapshot_rating' => $playerRating->rating,
                 'joined_at'       => now(),
+                'matched_at'      => null,
             ]);
+            
+            // Schedule bot fallback after 20 seconds
+            CreateBotFallback::dispatch($qe->id)->delay(now()->addSeconds(20));
         } else {
             // keep place in line; update only snapshot_rating
             if ($qe->snapshot_rating !== $playerRating->rating) {
@@ -106,11 +111,8 @@ final class QueueController extends Controller
                 return response()->json(['status' => 'queued', 'widening' => ['delta' => $delta]], 202);
             }
 
-            // Delete both rows atomically; assert exactly 2 rows gone.
-            $deleted = QueueEntry::whereIn('id', [$me->id, $opp->id])->delete();
-            if ($deleted !== 2) {
-                throw new \RuntimeException('Queue cleanup failed; retry');
-            }
+            // Mark both queue entries as matched (for audit trail)
+            QueueEntry::whereIn('id', [$me->id, $opp->id])->update(['matched_at' => now()]);
 
             $initial    = $tc->initial_sec * 1000;
             $whiteFirst = random_int(0, 1) === 1;
@@ -144,5 +146,14 @@ final class QueueController extends Controller
             })
             ->latest('id')
             ->first();
+    }
+    
+    public function matchedHuman(Request $r)
+    {
+        $qeId = (int) $r->input('queue_entry_id');
+        $qe = QueueEntry::findOrFail($qeId);
+        $qe->matched_at = now();
+        $qe->save();
+        return response()->json(['ok' => true]);
     }
 }

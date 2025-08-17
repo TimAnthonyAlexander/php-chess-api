@@ -9,6 +9,7 @@ use App\Models\GameAnalysis;
 use App\Models\GameMove;
 use App\Models\PlayerRating;
 use App\Models\TimeControl;
+use App\Jobs\BotMakeMove;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -291,6 +292,11 @@ final class GameController extends Controller
                 (method_exists($board, 'isFivefoldRepetition') && $board->isFivefoldRepetition())
             ) {
                 return $this->finish($g, '1/2-1/2', 'draw');
+            }
+            
+            // If this is a game with a bot, schedule the bot's move
+            if ($g->has_bot) {
+                BotMakeMove::dispatch($g->id)->delay(now()->addMilliseconds(random_int(800, 2000)));
             }
 
             return response()->json(['ok' => true, 'lock_version' => $g->lock_version]);

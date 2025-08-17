@@ -19,9 +19,10 @@ class DatabaseSeeder extends Seeder
             'email' => 'test@example.com',
         ]);
         
-        // Seed time controls
+        // Seed time controls and bots
         $this->call([
             TimeControlSeeder::class,
+            BotUserSeeder::class,
         ]);
     }
 }

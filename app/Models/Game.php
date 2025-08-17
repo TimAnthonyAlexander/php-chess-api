@@ -28,9 +28,9 @@ class Game extends Model
         'white_time_ms' => 'integer',
         'black_time_ms' => 'integer',
     ];
-    
+
     protected $appends = ['timeControl'];
-    
+
     public function getTimeControlAttribute()
     {
         return $this->timeControl()->first();
@@ -59,5 +59,16 @@ class Game extends Model
     public function analysis()
     {
         return $this->hasOne(GameAnalysis::class);
+    }
+
+    protected static function booted()
+    {
+        static::saving(function (Game $g) {
+            if ($g->isDirty(['white_id', 'black_id']) || is_null($g->has_bot)) {
+                $wBot = $g->white_id ? (bool) User::whereKey($g->white_id)->value('is_bot') : false;
+                $bBot = $g->black_id ? (bool) User::whereKey($g->black_id)->value('is_bot') : false;
+                $g->has_bot = $wBot || $bBot;
+            }
+        });
     }
 }
