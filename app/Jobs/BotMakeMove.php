@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Models\Game;
 use App\Models\GameMove;
+use App\Models\PlayerRating;
 use App\Services\StockfishService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -27,12 +28,27 @@ class BotMakeMove implements ShouldQueue
 
             $fen = $g->fen === 'startpos' ? 'startpos' : $g->fen;
 
-            $skill = 6 + ($g->id % 4);
-            $ms    = 250 + ($g->id % 250);
+            $toMoveIsWhite = ($g->move_index % 2 === 0);
+            $botUserId = $toMoveIsWhite ? $g->white_id : $g->black_id;
+
+            $tc = $g->timeControl;
+            $rating = PlayerRating::query()
+                ->where('user_id', $botUserId)
+                ->when($tc && isset($tc->time_class), fn($q) => $q->where('time_class', $tc->time_class))
+                ->value('rating') ?? 1500;
+
+            $skill = (int) max(0, min(20, round(($rating - 800) / 40)));
+
+            $base = match ($tc->time_class ?? null) {
+                'bullet' => 80,
+                'blitz'  => 180,
+                'rapid'  => 350,
+                default  => 250,
+            };
+            $ms = (int) max(40, $base + (20 - $skill) * 25);
 
             $uci = $engine->bestMove($fen, $skill, $ms);
             if (!$uci) {
-                // No legal move (shouldn't happen often) -> flag draw as fallback
                 $g->status = 'finished';
                 $g->result = '1/2-1/2';
                 $g->reason = 'no-uci';
@@ -40,16 +56,13 @@ class BotMakeMove implements ShouldQueue
                 return;
             }
 
-            // Timekeeping for the mover (it is currently bot's turn)
             $elapsedMs = 0;
             if ($g->last_move_at) {
                 $elapsedMs = max(0, $g->last_move_at->diffInMilliseconds(now()));
             }
 
-            $tc = $g->timeControl;
             $whiteMs = (int) $g->white_time_ms;
             $blackMs = (int) $g->black_time_ms;
-            $toMoveIsWhite = ($g->move_index % 2 === 0);
 
             if ($toMoveIsWhite) {
                 $whiteMs = max(0, $whiteMs - $elapsedMs) + (int) $tc->increment_ms;
@@ -57,7 +70,6 @@ class BotMakeMove implements ShouldQueue
                 $blackMs = max(0, $blackMs - $elapsedMs) + (int) $tc->increment_ms;
             }
 
-            // Apply move via engine to get the post-move FEN (authoritative)
             $fenAfter = $engine->fenAfter($fen, $uci) ?? $g->fen;
 
             $from = substr($uci, 0, 2);
@@ -70,18 +82,14 @@ class BotMakeMove implements ShouldQueue
             $g->fen           = $fenAfter;
             $g->last_move_at  = now();
             $g->lock_version  = ($g->lock_version ?? 0) + 1;
-
-            // Optional: detect checkmate/stalemate quickly by checking no best move next turn.
-            // Keep it simple and let your existing finish logic handle terminal states.
-
             $g->save();
 
             GameMove::create([
                 'game_id'               => $g->id,
                 'ply'                   => $g->move_index,
-                'by_user_id'            => ($toMoveIsWhite ? $g->white_id : $g->black_id),
+                'by_user_id'            => $botUserId,
                 'uci'                   => $uci,
-                'san'                   => null, // Explicitly set to null since we don't calculate SAN
+                'san'                   => null,
                 'from_sq'               => $from,
                 'to_sq'                 => $to,
                 'promotion'             => $promotion,
@@ -90,8 +98,5 @@ class BotMakeMove implements ShouldQueue
                 'black_time_ms_after'   => $blackMs,
             ]);
         });
-        // Do NOT self-reschedule here. You already:
-        // - schedule the first bot move if bot is white (CreateBotFallback)
-        // - schedule after human moves (GameController::move)
     }
 }
