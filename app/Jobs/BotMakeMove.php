@@ -55,7 +55,7 @@ class BotMakeMove implements ShouldQueue
 
             $inc = (int) ($tc->increment_ms ?? 0);
 
-            $eloCap = $rating > 0 && $rating <= 3000 ? (int) $rating : null;
+            $eloCap = ($rating >= 1320 && $rating <= 3000) ? (int) $rating : null;
 
             Log::info('bot_move.parameters', [
                 'game_id' => $g->id,
@@ -70,13 +70,16 @@ class BotMakeMove implements ShouldQueue
                 'move_index' => $g->move_index,
             ]);
 
-            $cap = match ($tc->time_class ?? null) {
-                'bullet' => 800,
-                'blitz'  => 2500,
-                'rapid'  => 6000,
-                'classical' => 10000,
-                default  => 3000,
+            $baseCap = match ($tc->time_class ?? null) {
+                'bullet'     => 300,
+                'blitz'      => 900,
+                'rapid'      => 2000,
+                'classical'  => 3500,
+                default      => 1200,
             };
+
+            $sideRemain = $toMoveIsWhite ? $wRemain : $bRemain;
+            $cap = (int) max(120, min($baseCap, $sideRemain / 40));
 
             $uci = $engine->bestMoveFromClock(
                 $fen,

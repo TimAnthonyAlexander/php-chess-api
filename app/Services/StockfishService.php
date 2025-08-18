@@ -85,50 +85,78 @@ class StockfishService
         int $wincMs = 0,
         int $bincMs = 0,
         ?int $eloCap = null,
-        ?int $hardCapMs = null // if null, choose heuristic below
+        ?int $hardCapMs = null
     ): ?string {
         $this->send("ucinewgame");
         $this->send("isready");
         $this->waitFor("/\breadyok\b/");
 
-        if ($eloCap !== null) {
-            $this->send("setoption name Skill Level value 20");
-            $this->send("setoption name UCI_LimitStrength value true");
-            $this->send("setoption name UCI_Elo value " . max(1000, min(3000, $eloCap)));
-        } else {
-            $this->send("setoption name UCI_LimitStrength value false");
-            $this->send("setoption name Skill Level value 20");
-        }
+        // Keep engine tame and deterministic enough
+        $this->send("setoption name MultiPV value 1");
+        $this->send("setoption name Threads value 1");
 
+        // Position
         $pos = ($fenOrStart === 'startpos') ? 'position startpos' : 'position fen ' . $fenOrStart;
         $this->send($pos);
 
-        // Choose a sane ceiling if not provided
+        // If no hard cap provided, derive one from clocks but keep it conservative
         if ($hardCapMs === null) {
-            // crude heuristic: more time on the clock → larger cap
             $sideTotal = max($wtimeMs, $btimeMs);
-            $hardCapMs = (int) max(600, min(10000, ($sideTotal / 60))); // e.g. 30min → 30_000ms cap
+            $hardCapMs = (int) max(150, min(4000, ($sideTotal / 120))); // much tighter than before
         }
 
-        $this->send(sprintf(
-            "go wtime %d btime %d winc %d binc %d",
-            max(0, $wtimeMs),
-            max(0, $btimeMs),
-            max(0, $wincMs),
-            max(0, $bincMs)
-        ));
+        // Decide weakening mode
+        $useElo = $eloCap !== null && $eloCap >= 1320; // Stockfish min is ~1320
+        if ($useElo) {
+            $this->send("setoption name UCI_LimitStrength value true");
+            $this->send("setoption name UCI_Elo value " . min(3190, $eloCap)); // doc max ~3190
+            // Do NOT set Skill Level here (it’s overridden by UCI_LimitStrength)
+            // Cap per-move time a bit so it doesn't think forever
+            $perMoveMs = (int) min($hardCapMs, 300 + ($eloCap - 1320) * 0.05); // ~300–450ms typical
+            $goCmd = sprintf(
+                "go wtime %d btime %d winc %d binc %d movetime %d",
+                max(0, $wtimeMs),
+                max(0, $btimeMs),
+                max(0, $wincMs),
+                max(0, $bincMs),
+                max(150, $perMoveMs)
+            );
+        } else {
+            // Below ~1300 Elo target: use Skill Level + very small movetime
+            $this->send("setoption name UCI_LimitStrength value false");
 
-        // Wait up to hard cap. If exceeded, send stop and wait for bestmove.
+            // Map 200..1200 target to Skill 0..6 (aggressively weak and blunder-prone)
+            $target = $eloCap ?? 800;
+            $skill = (int) round(max(0, min(6, ($target - 200) / (1200 - 200) * 6)));
+            $this->send("setoption name Skill Level value " . $skill);
+
+            // Very small per-move time to enforce fast, weak play
+            // ~60ms at 200 Elo rising to ~180ms at 1200
+            $perMoveMs = (int) round(60 + (max(200, min(1200, $target)) - 200) * (120.0 / 1000.0));
+            $perMoveMs = (int) min($perMoveMs, $hardCapMs);
+
+            $goCmd = sprintf(
+                "go wtime %d btime %d winc %d binc %d movetime %d",
+                max(0, $wtimeMs),
+                max(0, $btimeMs),
+                max(0, $wincMs),
+                max(0, $bincMs),
+                max(40, $perMoveMs)
+            );
+        }
+
+        $this->send($goCmd);
+
+        // Wait up to hard cap; if needed, 'stop'
         $buf = $this->waitFor("/\bbestmove\s+[a-h][1-8][a-h][1-8][qrbn]?\b/", $hardCapMs);
-        if (!preg_match('/bestmove\s+([a-h][1-8][a-h][1-8][qrbn]?)/', $buf, $m)) {
+        if (!preg_match('/bestmove\s+([a-h][1-8][a-h][1-8][qrbn]?)/', $buf)) {
             $this->send("stop");
-            $buf .= $this->waitFor("/\bbestmove\s+[a-h][1-8][a-h][1-8][qrbn]?\b/", 3000);
+            $buf .= $this->waitFor("/\bbestmove\s+[a-h][1-8][a-h][1-8][qrbn]?\b/", 2000);
         }
 
         if (preg_match('/bestmove\s+([a-h][1-8][a-h][1-8][qrbn]?)/', $buf, $m)) {
             return $m[1];
         }
-
         return null;
     }
 

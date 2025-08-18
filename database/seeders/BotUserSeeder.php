@@ -13,6 +13,7 @@ class BotUserSeeder extends Seeder
     {
         // baseline ELOs per bot “strength”
         $bots = [
+            ['DarkSquare Feli',       200],
             ['DarkSquare Guest',       600],
             ['DarkSquare Challenger',  800],
             ['DarkSquare Rival',      1000],
