@@ -11,6 +11,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class BotMakeMove implements ShouldQueue
 {
@@ -37,6 +38,13 @@ class BotMakeMove implements ShouldQueue
                 ->when($tc && isset($tc->time_class), fn($q) => $q->where('time_class', $tc->time_class))
                 ->value('rating') ?? 1500;
 
+            Log::info('rating', [
+                'game_id' => $g->id,
+                'bot_user_id' => $botUserId,
+                'time_class' => $tc->time_class ?? null,
+                'rating' => $rating,
+            ]);
+
             $skill = (int) max(0, min(20, round(($rating - 800) / 40)));
 
             $base = match ($tc->time_class ?? null) {
@@ -47,6 +55,17 @@ class BotMakeMove implements ShouldQueue
             };
             $ms = (int) max(40, $base + (20 - $skill) * 25);
 
+            Log::info('bot_move.parameters', [
+                'game_id' => $g->id,
+                'bot_user_id' => $botUserId,
+                'time_class' => $tc->time_class ?? null,
+                'rating' => $rating,
+                'skill' => $skill,
+                'ms' => $ms,
+                'fen' => $fen,
+                'move_index' => $g->move_index,
+            ]);
+
             $uci = $engine->bestMove($fen, $skill, $ms);
             if (!$uci) {
                 $g->status = 'finished';
@@ -55,6 +74,11 @@ class BotMakeMove implements ShouldQueue
                 $g->save();
                 return;
             }
+
+            Log::info('bot_move.result', [
+                'game_id' => $g->id,
+                'uci' => $uci,
+            ]);
 
             $elapsedMs = 0;
             if ($g->last_move_at) {
