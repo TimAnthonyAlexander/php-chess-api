@@ -5,6 +5,8 @@ namespace App\Jobs;
 use App\Models\Game;
 use App\Models\GameMove;
 use App\Models\PlayerRating;
+use App\Models\TimeControl;
+use App\Models\GameAnalysis;
 use App\Services\StockfishService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -12,6 +14,7 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Chess\Variant\Classical\FenToBoardFactory;
 
 class BotMakeMove implements ShouldQueue
 {
@@ -146,6 +149,104 @@ class BotMakeMove implements ShouldQueue
                 'white_time_ms_after'   => $whiteMs,
                 'black_time_ms_after'   => $blackMs,
             ]);
+
+            // Detect end-of-game states (mate/draw) after the bot's move
+            try {
+                $boardAfter = FenToBoardFactory::create($fenAfter);
+
+                if (method_exists($boardAfter, 'isMate') && $boardAfter->isMate()) {
+                    $result = $toMoveIsWhite ? '1-0' : '0-1';
+
+                    $g->status = 'finished';
+                    $g->result = $result;
+                    $g->reason = 'checkmate';
+                    $g->save();
+
+                    // Apply Elo updates similar to other finish paths
+                    $tc = TimeControl::find($g->time_control_id);
+                    $wr = PlayerRating::firstOrCreate(['user_id' => $g->white_id, 'time_class' => $tc->time_class]);
+                    $br = PlayerRating::firstOrCreate(['user_id' => $g->black_id, 'time_class' => $tc->time_class]);
+
+                    $rW = (int) $wr->rating;
+                    $rB = (int) $br->rating;
+                    $gW = (int) $wr->games;
+                    $gB = (int) $br->games;
+
+                    $scoreW = $result === '1-0' ? 1.0 : 0.0;
+                    $scoreB = 1.0 - $scoreW;
+
+                    $kW = $gW < 30 ? 40 : 20;
+                    $kB = $gB < 30 ? 40 : 20;
+
+                    $eW = 1.0 / (1.0 + pow(10.0, ($rB - $rW) / 400.0));
+                    $eB = 1.0 - $eW;
+
+                    $wr->rating = (int) round($rW + $kW * ($scoreW - $eW));
+                    $br->rating = (int) round($rB + $kB * ($scoreB - $eB));
+                    $wr->games = $gW + 1;
+                    $br->games = $gB + 1;
+                    $wr->save();
+                    $br->save();
+
+                    GameAnalysis::firstOrCreate(['game_id' => $g->id], ['status' => 'queued']);
+
+                    Log::info('bot_move.checkmate', [
+                        'game_id' => $g->id,
+                        'result' => $result,
+                    ]);
+
+                    return;
+                }
+
+                if (
+                    (method_exists($boardAfter, 'isStalemate') && $boardAfter->isStalemate()) ||
+                    (method_exists($boardAfter, 'isFivefoldRepetition') && $boardAfter->isFivefoldRepetition())
+                ) {
+                    $g->status = 'finished';
+                    $g->result = '1/2-1/2';
+                    $g->reason = 'draw';
+                    $g->save();
+
+                    $tc = TimeControl::find($g->time_control_id);
+                    $wr = PlayerRating::firstOrCreate(['user_id' => $g->white_id, 'time_class' => $tc->time_class]);
+                    $br = PlayerRating::firstOrCreate(['user_id' => $g->black_id, 'time_class' => $tc->time_class]);
+
+                    $rW = (int) $wr->rating;
+                    $rB = (int) $br->rating;
+                    $gW = (int) $wr->games;
+                    $gB = (int) $br->games;
+
+                    $scoreW = 0.5;
+                    $scoreB = 0.5;
+
+                    $kW = $gW < 30 ? 40 : 20;
+                    $kB = $gB < 30 ? 40 : 20;
+
+                    $eW = 1.0 / (1.0 + pow(10.0, ($rB - $rW) / 400.0));
+                    $eB = 1.0 - $eW;
+
+                    $wr->rating = (int) round($rW + $kW * ($scoreW - $eW));
+                    $br->rating = (int) round($rB + $kB * ($scoreB - $eB));
+                    $wr->games = $gW + 1;
+                    $br->games = $gB + 1;
+                    $wr->save();
+                    $br->save();
+
+                    GameAnalysis::firstOrCreate(['game_id' => $g->id], ['status' => 'queued']);
+
+                    Log::info('bot_move.draw', [
+                        'game_id' => $g->id,
+                        'reason' => 'draw',
+                    ]);
+
+                    return;
+                }
+            } catch (\Throwable $e) {
+                Log::warning('bot_move.terminal_check_failed', [
+                    'game_id' => $g->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
         });
     }
 }
