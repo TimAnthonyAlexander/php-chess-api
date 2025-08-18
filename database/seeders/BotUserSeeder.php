@@ -16,6 +16,15 @@ class BotUserSeeder extends Seeder
             ['DarkSquare Guest',       600],
             ['DarkSquare Challenger',  800],
             ['DarkSquare Rival',      1000],
+            ['DarkSquare Expert',     1200],
+            ['DarkSquare Master',     1400],
+            ['DarkSquare Grandmaster', 1600],
+            ['DarkSquare SuperGM',    1800],
+            ['DarkSquare Bot',        2000],
+            ['DarkSquare Bot Pro',    2200],
+            ['DarkSquare Bot Elite',  2400],
+            ['DarkSquare Bot Supreme', 2600],
+            ['DarkSquare Bot Ultimate', 2800],
         ];
 
         // choose the time classes you actually use

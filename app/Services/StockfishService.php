@@ -24,7 +24,7 @@ class StockfishService
             'setoption name Threads value 1',
             'setoption name Skill Level value ' . $skill,
             'setoption name UCI_LimitStrength value true',
-            'setoption name UCI_Elo value ' . (800 + $skill * 75),
+            'setoption name UCI_Elo value ' . (1000 + $skill * 75),
             'ucinewgame',
             $pos,
             'go movetime ' . $moveTimeMs,
@@ -68,3 +68,4 @@ class StockfishService
         return null;
     }
 }
+
