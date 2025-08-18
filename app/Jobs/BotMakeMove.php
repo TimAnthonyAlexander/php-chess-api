@@ -58,14 +58,13 @@ class BotMakeMove implements ShouldQueue
 
             $inc = (int) ($tc->increment_ms ?? 0);
 
-            $eloCap = ($rating >= 1320 && $rating <= 3000) ? (int) $rating : null;
+            $eloTarget = (int) max(200, min(3000, $rating));
 
             Log::info('bot_move.parameters', [
                 'game_id' => $g->id,
                 'bot_user_id' => $botUserId,
                 'time_class' => $tc->time_class ?? null,
                 'rating' => $rating,
-                'elo_cap' => $eloCap,
                 'wtime_ms' => $wRemain,
                 'btime_ms' => $bRemain,
                 'inc_ms' => $inc,
@@ -84,13 +83,26 @@ class BotMakeMove implements ShouldQueue
             $sideRemain = $toMoveIsWhite ? $wRemain : $bRemain;
             $cap = (int) max(120, min($baseCap, $sideRemain / 40));
 
+            Log::info('bot_move.parameters', [
+                'game_id' => $g->id,
+                'bot_user_id' => $botUserId,
+                'time_class' => $tc->time_class ?? null,
+                'rating' => $rating,
+                'elo_target' => $eloTarget,
+                'wtime_ms' => $wRemain,
+                'btime_ms' => $bRemain,
+                'inc_ms' => $inc,
+                'fen' => $fen,
+                'move_index' => $g->move_index,
+            ]);
+
             $uci = $engine->bestMoveFromClock(
                 $fen,
                 $wRemain,
                 $bRemain,
                 $inc,
                 $inc,
-                $eloCap,
+                $eloTarget,
                 $cap
             );
 
@@ -101,7 +113,6 @@ class BotMakeMove implements ShouldQueue
                     'wtime_ms' => $wRemain,
                     'btime_ms' => $bRemain,
                     'inc_ms' => $inc,
-                    'elo_cap' => $eloCap,
                 ]);
 
                 $g->status = 'finished';
