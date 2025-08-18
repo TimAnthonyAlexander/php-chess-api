@@ -45,29 +45,59 @@ class BotMakeMove implements ShouldQueue
                 'rating' => $rating,
             ]);
 
-            $skill = (int) max(0, min(20, round(($rating - 800) / 40)));
+            $elapsedMs = $g->last_move_at ? max(0, $g->last_move_at->diffInMilliseconds(now())) : 0;
 
-            $base = match ($tc->time_class ?? null) {
-                'bullet' => 80,
-                'blitz'  => 180,
-                'rapid'  => 350,
-                default  => 250,
-            };
-            $ms = (int) max(40, $base + (20 - $skill) * 25);
+            $whiteMs = (int) $g->white_time_ms;
+            $blackMs = (int) $g->black_time_ms;
+
+            $wRemain = $toMoveIsWhite ? max(0, $whiteMs - $elapsedMs) : $whiteMs;
+            $bRemain = $toMoveIsWhite ? $blackMs : max(0, $blackMs - $elapsedMs);
+
+            $inc = (int) ($tc->increment_ms ?? 0);
+
+            $eloCap = $rating > 0 && $rating <= 3000 ? (int) $rating : null;
 
             Log::info('bot_move.parameters', [
                 'game_id' => $g->id,
                 'bot_user_id' => $botUserId,
                 'time_class' => $tc->time_class ?? null,
                 'rating' => $rating,
-                'skill' => $skill,
-                'ms' => $ms,
+                'elo_cap' => $eloCap,
+                'wtime_ms' => $wRemain,
+                'btime_ms' => $bRemain,
+                'inc_ms' => $inc,
                 'fen' => $fen,
                 'move_index' => $g->move_index,
             ]);
 
-            $uci = $engine->bestMove($fen, $skill, $ms);
+            $cap = match ($tc->time_class ?? null) {
+                'bullet' => 800,
+                'blitz'  => 2500,
+                'rapid'  => 6000,
+                'classical' => 10000,
+                default  => 3000,
+            };
+
+            $uci = $engine->bestMoveFromClock(
+                $fen,
+                $wRemain,
+                $bRemain,
+                $inc,
+                $inc,
+                $eloCap,
+                $cap
+            );
+
             if (!$uci) {
+                Log::warning('Stockfish did not return a best move', [
+                    'game_id' => $g->id,
+                    'fen' => $fen,
+                    'wtime_ms' => $wRemain,
+                    'btime_ms' => $bRemain,
+                    'inc_ms' => $inc,
+                    'elo_cap' => $eloCap,
+                ]);
+
                 $g->status = 'finished';
                 $g->result = '1/2-1/2';
                 $g->reason = 'no-uci';
@@ -80,18 +110,10 @@ class BotMakeMove implements ShouldQueue
                 'uci' => $uci,
             ]);
 
-            $elapsedMs = 0;
-            if ($g->last_move_at) {
-                $elapsedMs = max(0, $g->last_move_at->diffInMilliseconds(now()));
-            }
-
-            $whiteMs = (int) $g->white_time_ms;
-            $blackMs = (int) $g->black_time_ms;
-
             if ($toMoveIsWhite) {
-                $whiteMs = max(0, $whiteMs - $elapsedMs) + (int) $tc->increment_ms;
+                $whiteMs = max(0, $whiteMs - $elapsedMs) + $inc;
             } else {
-                $blackMs = max(0, $blackMs - $elapsedMs) + (int) $tc->increment_ms;
+                $blackMs = max(0, $blackMs - $elapsedMs) + $inc;
             }
 
             $fenAfter = $engine->fenAfter($fen, $uci) ?? $g->fen;
