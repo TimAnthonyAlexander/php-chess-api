@@ -157,7 +157,7 @@ class StockfishService
         $pWeak = 0.35 + 0.45 * $w;
         if ($this->rand() < $pWeak && count($candidates) > 1) {
             $idx = 1 + random_int(0, min($k - 1, count($candidates) - 1));
-            return $candidates[$idx];
+            return $candidates[$idx] ?? $candidates[0];
         }
 
         Log::info('stockfish.weak_move.chosen', [
