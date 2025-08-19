@@ -69,12 +69,23 @@ final class GameController extends Controller
 
         [$toMove, $toMoveUserId] = $this->computeToMove($g);
 
+        // Fetch ratings for the specific time class of this game
+        $timeClass = $g->timeControl?->time_class;
+        $whiteRating = $timeClass
+            ? PlayerRating::where('user_id', $g->white_id)->where('time_class', $timeClass)->value('rating')
+            : null;
+        $blackRating = $timeClass
+            ? PlayerRating::where('user_id', $g->black_id)->where('time_class', $timeClass)->value('rating')
+            : null;
+
         return response()->json([
             'game' => $g,
             'moves' => $moves,
             'to_move' => $toMove,               // 'white' | 'black' | null
             'to_move_user_id' => $toMoveUserId, // int | null
             'server_now' => now()->toISOString(),
+            'white_rating' => $whiteRating !== null ? (int) $whiteRating : 1200,
+            'black_rating' => $blackRating !== null ? (int) $blackRating : 1200,
         ]);
     }
 
@@ -154,6 +165,15 @@ final class GameController extends Controller
 
         [$toMove, $toMoveUserId] = $this->computeToMove($g);
 
+        // Fetch ratings for completeness (cheap lookup), even though client may not update them during sync
+        $timeClass = $g->timeControl?->time_class;
+        $whiteRating = $timeClass
+            ? PlayerRating::where('user_id', $g->white_id)->where('time_class', $timeClass)->value('rating')
+            : null;
+        $blackRating = $timeClass
+            ? PlayerRating::where('user_id', $g->black_id)->where('time_class', $timeClass)->value('rating')
+            : null;
+
         return response()->json([
             'status' => $g->status,
             'result' => $g->result,
@@ -170,6 +190,8 @@ final class GameController extends Controller
             'to_move' => $toMove,                // 'white' | 'black' | null
             'to_move_user_id' => $toMoveUserId,  // int | null
             'server_now' => now()->toISOString(),
+            'white_rating' => $whiteRating !== null ? (int) $whiteRating : 1200,
+            'black_rating' => $blackRating !== null ? (int) $blackRating : 1200,
         ]);
     }
 

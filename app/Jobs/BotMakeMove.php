@@ -103,7 +103,7 @@ class BotMakeMove implements ShouldQueue
                 $inc,
                 $inc,
                 $eloTarget,
-                $cap
+                $cap,
             );
 
             if (!$uci) {
