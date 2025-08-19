@@ -19,7 +19,7 @@ return [
 
     'allowed_methods' => ['*'],
 
-    'allowed_origins' => ['http://localhost:3999', 'https://chess.timanthonyalexander.de'],
+    'allowed_origins' => ['http://localhost:3998', 'https://chess.timanthonyalexander.de'],
 
     'allowed_origins_patterns' => [],
 
