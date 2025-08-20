@@ -86,7 +86,10 @@ class StockfishService
         if ($target >= 1320) {
             $this->send('setoption name UCI_LimitStrength value true');
             $this->send('setoption name UCI_Elo value ' . min(3190, $target));
-            $perMoveMs = (int) min($hardCapMs, 300 + ($target - 1320) * 0.05);
+            // If a hard cap is provided, respect it as the movetime budget; otherwise derive a small budget
+            $perMoveMs = $hardCapMs !== null
+                ? (int) $hardCapMs
+                : (int) (300 + ($target - 1320) * 0.05);
             $go = sprintf(
                 'go wtime %d btime %d winc %d binc %d movetime %d',
                 max(0, $wtimeMs),
