@@ -15,11 +15,20 @@ class StockfishService
     public function __construct()
     {
         $this->bin = env('STOCKFISH_BIN', 'stockfish');
+        Log::info('StockfishService initializing', ['binary' => $this->bin]);
+        
         $this->stdin = new InputStream();
         $this->proc = new Process([$this->bin]);
         $this->proc->setInput($this->stdin);
         $this->proc->setTimeout(null);
-        $this->proc->start();
+        
+        try {
+            $this->proc->start();
+            Log::info('StockfishService process started', ['pid' => $this->proc->getPid()]);
+        } catch (\Throwable $e) {
+            Log::error('StockfishService failed to start', ['error' => $e->getMessage()]);
+            throw $e;
+        }
 
         $this->send('uci');
         $this->waitFor('/\buciok\b/');
@@ -68,9 +77,29 @@ class StockfishService
         ?int $eloTarget = null,
         ?int $hardCapMs = null
     ): ?string {
+        Log::info('StockfishService.bestMoveFromClock called', [
+            'fen' => $fenOrStart,
+            'wtime_ms' => $wtimeMs,
+            'btime_ms' => $btimeMs,
+            'winc_ms' => $wincMs,
+            'binc_ms' => $bincMs,
+            'elo_target' => $eloTarget,
+            'hard_cap_ms' => $hardCapMs,
+        ]);
+
+        if (!$this->proc->isRunning()) {
+            Log::error('Stockfish process is not running');
+            return null;
+        }
+
         $this->send('ucinewgame');
         $this->send('isready');
-        $this->waitFor('/\breadyok\b/');
+        $readyBuf = $this->waitFor('/\breadyok\b/');
+        if (!preg_match('/\breadyok\b/', $readyBuf)) {
+            Log::error('Stockfish did not respond readyok', ['buffer' => $readyBuf]);
+            return null;
+        }
+
         $this->send('setoption name MultiPV value 1');
         $this->send('setoption name Threads value 1');
 
@@ -98,13 +127,26 @@ class StockfishService
                 max(0, $bincMs),
                 max(150, $perMoveMs)
             );
+            Log::info('StockfishService.sending_go_command', ['command' => $go]);
             $this->send($go);
-            $buf = $this->waitFor('/\bbestmove\s+[a-h][1-8][a-h][1-8][qrbn]?\b/', max(300, $perMoveMs + 800));
+            
+            $waitTimeMs = max(300, $perMoveMs + 800);
+            Log::info('StockfishService.waiting_for_bestmove', ['wait_time_ms' => $waitTimeMs]);
+            $buf = $this->waitFor('/\bbestmove\s+[a-h][1-8][a-h][1-8][qrbn]?\b/', $waitTimeMs);
+            
             if (!preg_match('/bestmove\s+([a-h][1-8][a-h][1-8][qrbn]?)/', $buf)) {
+                Log::info('StockfishService.no_bestmove_yet', ['buffer_length' => strlen($buf), 'buffer' => substr($buf, -200)]);
                 $this->send('stop');
                 $buf .= $this->waitFor('/\bbestmove\s+[a-h][1-8][a-h][1-8][qrbn]?\b/', 1500);
+                Log::info('StockfishService.after_stop', ['buffer_length' => strlen($buf), 'buffer' => substr($buf, -200)]);
             }
-            if (preg_match('/bestmove\s+([a-h][1-8][a-h][1-8][qrbn]?)/', $buf, $m)) return $m[1];
+            
+            if (preg_match('/bestmove\s+([a-h][1-8][a-h][1-8][qrbn]?)/', $buf, $m)) {
+                Log::info('StockfishService.found_bestmove', ['move' => $m[1]]);
+                return $m[1];
+            }
+            
+            Log::warning('StockfishService.no_bestmove_found', ['buffer' => $buf]);
             return null;
         }
 
@@ -113,6 +155,8 @@ class StockfishService
 
     private function weakMove(string $fenOrStart, int $target): ?string
     {
+        Log::info('StockfishService.weakMove called', ['fen' => $fenOrStart, 'target' => $target]);
+        
         $this->send('setoption name UCI_LimitStrength value false');
         $this->send('setoption name Skill Level value 0');
 
@@ -126,8 +170,10 @@ class StockfishService
         $this->send($base);
 
         $this->send('go depth 1');
+        Log::info('StockfishService.weakMove waiting for depth 1');
         $buf = $this->waitFor('/\bbestmove\s+[a-h][1-8][a-h][1-8][qrbn]?\b/', 500);
         if (!preg_match('/bestmove\s+([a-h][1-8][a-h][1-8][qrbn]?)/', $buf)) {
+            Log::info('StockfishService.weakMove no bestmove yet, sending stop');
             $this->send('stop');
             $buf .= $this->waitFor('/\bbestmove\s+[a-h][1-8][a-h][1-8][qrbn]?\b/', 500);
         }
